@@ -139,7 +139,7 @@ for myHOST in ${myCFRECORD_NAMES[@]}; do
     echo "{\"id\":\"$myCFZONE_ID\",\"type\":\"$myCFRECORD_TYPE\",\"name\":\"$myHOST\",\"content\":\"$myWAN_IP\", \"ttl\":$myCFTTL}"
   else
     echo 'Something went wrong :('
-    echo "Response: $RESPONSE"
+    echo "Response: $myRESPONSE"
   fi
   echo "Processed: $myHOST"
 done
