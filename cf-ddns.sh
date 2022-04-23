@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 set -o errexit
 set -o nounset
 set -o pipefail
@@ -16,7 +16,7 @@ set -o pipefail
 # Usage:
 # cf-ddns.sh -k cloudflare-api-key \
 #            -u user@example.com \
-#            -h "host.example.com" "host.example.com" \   # fqdn of the record you want to update
+#            -h host.example.com \                        # fqdn of the record you want to update
 #            -z example.com \                             # will show you all zones if forgot, but you need this
 #            -t A|AAAA \                                  # specify ipv4/ipv6, default: ipv4
 #            -m update|create \                           # create new A|AAAA record or update
@@ -31,8 +31,8 @@ myCFKEY=
 myCFUSER=
 # Zone name, eg: example.com
 myCFZONE_NAME=
-# Hostname to update, eg: ("homeserver.example.com" "example.com" "home.example.com")
-myCFRECORD_NAMES=
+# Hostname to update, eg: *.example.com
+myCFHOST_NAME=
 # Record type, A(IPv4)|AAAA(IPv6), default IPv4
 myCFRECORD_TYPE=A
 # update|create
@@ -60,7 +60,7 @@ while getopts k:u:h:z:t:m:p: opts; do
   case ${opts} in
     k) myCFKEY=${OPTARG} ;;
     u) myCFUSER=${OPTARG} ;;
-    h) myCFRECORD_NAMES=${OPTARG} ;;
+    h) myCFHOST_NAME=${OPTARG} ;;
     z) myCFZONE_NAME=${OPTARG} ;;
     t) myCFRECORD_TYPE=${OPTARG} ;;
     m) myCFMODE=${OPTARG} ;;
@@ -68,78 +68,80 @@ while getopts k:u:h:z:t:m:p: opts; do
   esac
 done
 
+# define logfile
+logfile=~/$myCFHOST_NAME.log
+date > $logfile
+echo "------------------------------" >> $logfile
+echo -e "Processing $myCFHOST_NAME\n" >> $logfile
+
 # If required settings are missing just exit
 if [ "$myCFKEY" = "" ]; then
-  echo "Missing api-key, get at: https://www.cloudflare.com/a/account/my-account"
-  echo "and save in ${0} or using the -k flag"
+  echo "Missing api-key, get at: https://www.cloudflare.com/a/account/my-account" >> $logfile
+  echo "and save in ${0} or using the -k flag" >> $logfile
   exit 2
 fi
 if [ "$myCFUSER" = "" ]; then
-  echo "Missing username, probably your email-address"
-  echo "and save in ${0} or using the -u flag"
+  echo "Missing username, probably your email-address" >> $logfile
+  echo "and save in ${0} or using the -u flag" >> $logfile
   exit 2
 fi
 # Processing the Hostname Array
-for myHOST in ${myCFRECORD_NAMES[@]}; do
-  if [ "$myHOST" = "" ]; then
-    echo "Missing hostname, what host do you want to update?"
-    echo "save in ${0} or using the -h flag"
-    exit 2
-  fi
+if [ "$myCFHOST_NAME" = "" ]; then
+  echo "Missing hostname, what host do you want to update?" >> $logfile
+  echo "save in ${0} or using the -h flag" >> $logfile
+  exit 2
+fi
 
-  # If the Hostname is not a FQDN
-  if [ "$myHOST" != "$myCFZONE_NAME" ] && ! [ -z "${myHOST##*$myCFZONE_NAME}" ]; then
-    myHOST="$myHOST.$myCFZONE_NAME"
-    echo " => Hostname is not a FQDN, assuming $myHOST"
-  fi
+# If the Hostname is not a FQDN
+if [ "$myCFHOST_NAME" != "$myCFZONE_NAME" ] && ! [ -z "${myCFHOST_NAME##*$myCFZONE_NAME}" ]; then
+  myCFHOST_NAME="$myCFHOST_NAME.$myCFZONE_NAME"
+  echo " => Hostname is not a FQDN, assuming $myCFHOST_NAME" >> $logfile
+fi
 
-	# Get Zone ID from File or API
-  if [ ! -d "$HOME/.cf-ddns/" ]; then
-    mkdir -p $HOME/.cf-ddns/
-  fi
-  ID_FILE=$HOME/.cf-ddns/.cf-id_$myCFZONE_NAME.txt
-  if [ -f $ID_FILE ] && [ $(wc -l $ID_FILE | cut -d " " -f 1) == 2 ] && [ "$(sed -n '1,1p' "$ID_FILE")" == "$myCFZONE_NAME" ]; then
-    myCFZONE_ID=$(sed -n '2,1p' "$ID_FILE")
+# Get Zone ID from File or API
+echo -e "\nGetting Zone ID" >> $logfile
+myCFZONE_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=$myCFZONE_NAME" -H "X-Auth-Email: $myCFUSER" -H "X-Auth-Key: $myCFKEY" -H "Content-Type: application/json" | jq -r '{"result"}[] | .[0] | .id' )
+echo "$myCFZONE_NAME has this ID : " >> $logfile
+echo "$myCFZONE_ID" >> $logfile
+
+# When updating DNS Record get Record ID
+if [ "$myCFMODE" = "update" ]; then
+  echo -e "\nGetting RECORD ID" >> $logfile
+  myCFRECORD_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$myCFZONE_ID/dns_records?name=$myCFHOST_NAME" -H "X-Auth-Email: $myCFUSER" -H "X-Auth-Key: $myCFKEY" -H "Content-Type: application/json" | jq -r '{"result"}[] | .[0] | .id' )
+  echo "$myCFHOST_NAME has this ID : " >> $logfile
+  echo "$myCFRECORD_ID" >> $logfile
+fi
+
+# update cloudflare DNS, trying to update DNS if entry exists
+if [ "$myCFMODE" = "update" ]; then
+
+  # update record
+  echo "Updating DNS $myCFRECORD_TYPE Record : $myCFHOST_NAME with $myWAN_IP" >> $logfile
+  myRESPONSE=$(curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$myCFZONE_ID/dns_records/$myCFRECORD_ID" \
+    -H "X-Auth-Email: $myCFUSER" \
+    -H "X-Auth-Key: $myCFKEY" \
+    -H "Content-Type: application/json" \
+    --data "{\"id\":\"$myCFZONE_ID\",\"type\":\"$myCFRECORD_TYPE\",\"name\":\"$myCFHOST_NAME\",\"content\":\"$myWAN_IP\", \"ttl\":$myCFTTL}")
   else
-    echo "Updating Zone ID"
-    echo "$myCFZONE_NAME" > $ID_FILE
-    myCFZONE_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=$myCFZONE_NAME" -H "X-Auth-Email: $myCFUSER" -H "X-Auth-Key: $myCFKEY" -H "Content-Type: application/json" | grep -Po '(?<="id":")[^"]*' | head -1 )
-    echo "$myCFZONE_ID" >> $ID_FILE
 
-	  # When updating DNS Record get Record ID
-    if [ "$myCFMODE" = "update" ] && [ "$myCFMODE" != "create" ]; then
-      myCFRECORD_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$myCFZONE_ID/dns_records?name=$myHOST" -H "X-Auth-Email: $myCFUSER" -H "X-Auth-Key: $myCFKEY" -H "Content-Type: application/json" | grep -Po '(?<="id":")[^"]*' | head -1 )
-    fi
+  # create new record
+  echo "Creating DNS $myCFRECORD_TYPE Record : $myCFHOST_NAME with $myWAN_IP" >> $logfile
+  myRESPONSE=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$myCFZONE_ID/dns_records/" \
+    -H "X-Auth-Email: $myCFUSER" \
+    -H "X-Auth-Key: $myCFKEY" \
+    -H "Content-Type: application/json" \
+    --data "{\"type\":\"$myCFRECORD_TYPE\",\"name\":\"$myCFHOST_NAME\",\"content\":\"$myWAN_IP\", \"ttl\":$myCFTTL}")
   fi
-  # update cloudflare DNS, trying to update DNS if entry exists
-  echo "Processing $myHOST"
-  if [ "$myCFMODE" = "update" ] && [ "$myCFMODE" != "create" ]; then
 
-    # update record
-    echo "Updating DNS $myCFRECORD_TYPE Record : $myHOST with $myWAN_IP"
-    myRESPONSE=$(curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$myCFZONE_ID/dns_records/$myCFRECORD_ID" \
-      -H "X-Auth-Email: $myCFUSER" \
-      -H "X-Auth-Key: $myCFKEY" \
-      -H "Content-Type: application/json" \
-      --data "{\"id\":\"$myCFZONE_ID\",\"type\":\"$myCFRECORD_TYPE\",\"name\":\"$myHOST\",\"content\":\"$myWAN_IP\", \"ttl\":$myCFTTL}")
-    else
-
-    # create new record
-    echo "Creating DNS $myCFRECORD_TYPE Record : $myHOST with $myWAN_IP"
-    myRESPONSE=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$myCFZONE_ID/dns_records/" \
-      -H "X-Auth-Email: $myCFUSER" \
-      -H "X-Auth-Key: $myCFKEY" \
-      -H "Content-Type: application/json" \
-      --data "{\"type\":\"$myCFRECORD_TYPE\",\"name\":\"$myHOST\",\"content\":\"$myWAN_IP\", \"ttl\":$myCFTTL}")
-    fi
-
-  # check for success
-  if [ "$myRESPONSE" != "${myRESPONSE%success*}" ] && [ "$(echo $myRESPONSE | grep "\"success\":true")" != "" ]; then
-    echo "Updated succesfuly with following DATA!"
-    echo "{\"id\":\"$myCFZONE_ID\",\"type\":\"$myCFRECORD_TYPE\",\"name\":\"$myHOST\",\"content\":\"$myWAN_IP\", \"ttl\":$myCFTTL}"
-  else
-    echo 'Something went wrong :('
-    echo "Response: $myRESPONSE"
-  fi
-  echo "Processed: $myHOST"
-done
+# check for success
+if [ "$myRESPONSE" != "${myRESPONSE%success*}" ] && [ "$(echo $myRESPONSE | grep "\"success\":true")" != "" ]; then
+  echo "Updated succesfuly with following DATA!" >> $logfile
+  echo -e "{\"id\":\"$myCFZONE_ID\",\"type\":\"$myCFRECORD_TYPE\",\"name\":\"$myCFHOST_NAME\",\"content\":\"$myWAN_IP\", \"ttl\":$myCFTTL}\n" >> $logfile
+else
+  echo 'Something went wrong :(' >> $logfile
+  echo "Response: $myRESPONSE" >> $logfile
+fi
+echo ""
+echo "Processed: $myCFHOST_NAME" >> $logfile
+echo "------------------------------" >> $logfile
+date >> $logfile
