@@ -116,7 +116,7 @@ fi
 if [ "$myCFMODE" = "update" ]; then
 
   # update record
-  echo "Updating DNS $myCFRECORD_TYPE Record : $myCFHOST_NAME with $myWAN_IP" >> $logfile
+  echo -e "\nUpdating DNS $myCFRECORD_TYPE Record : $myCFHOST_NAME with $myWAN_IP" >> $logfile
   myRESPONSE=$(curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$myCFZONE_ID/dns_records/$myCFRECORD_ID" \
     -H "X-Auth-Email: $myCFUSER" \
     -H "X-Auth-Key: $myCFKEY" \
